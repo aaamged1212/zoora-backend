@@ -1,5 +1,7 @@
 import sharp from "sharp";
 import axios from "axios";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 async function downloadImageWithRetry(url: string, attempt = 0): Promise<Buffer> {
   if (url.startsWith("data:")) {
@@ -22,98 +24,92 @@ async function downloadImageWithRetry(url: string, attempt = 0): Promise<Buffer>
 
 export async function composeImages(bgUrl: string, fgUrl: string): Promise<Buffer> {
   console.log("[Pipeline] 4/4: Compositing images...");
+  console.log("[Compose] simplified alpha-safe compose enabled");
+  console.log("[Compose] trim disabled");
+  console.log("[Compose] shadow disabled");
+  console.log("[Compose] flatten disabled");
   
   const bgBuffer = await downloadImageWithRetry(bgUrl);
-  const fgBuffer = await downloadImageWithRetry(fgUrl);
+  const productBuffer = await downloadImageWithRetry(fgUrl);
 
-  const bgPngBuffer = await sharp(bgBuffer).autoOrient().png().toBuffer();
-  const bg = sharp(bgPngBuffer);
-  const bgMeta = await bg.metadata();
+  const backgroundBuffer = await sharp(bgBuffer)
+    .autoOrient()
+    .png()
+    .toBuffer();
+  const bgMeta = await sharp(backgroundBuffer).metadata();
   const bgWidth = bgMeta.width || 1024;
   const bgHeight = bgMeta.height || 1024;
 
-  const alphaSafeProductBuffer = await sharp(fgBuffer)
+  const targetProductHeight = Math.floor(bgHeight * 0.65);
+  const targetProductWidthLimit = Math.floor(bgWidth * 0.80);
+
+  const productPng = await sharp(productBuffer)
     .autoOrient()
     .ensureAlpha()
+    .resize({
+      height: targetProductHeight,
+      width: targetProductWidthLimit,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
     .png()
     .toBuffer();
-  const productMeta = await sharp(alphaSafeProductBuffer).metadata();
+
+  const productMeta = await sharp(productPng).metadata();
+  const productWidth = productMeta.width || 0;
+  const productHeight = productMeta.height || 0;
 
   console.log("[Compose] product channels:", productMeta.channels);
   console.log("[Compose] product has alpha:", productMeta.hasAlpha === true || (productMeta.channels || 0) >= 4);
   console.log("[Compose] black background check:", productMeta.hasAlpha === true ? "alpha present" : "missing alpha");
   console.log("[Compose] using alpha-safe product:", true);
 
-  const trimmedFgBuffer = await sharp(alphaSafeProductBuffer)
-    .trim()
-    .ensureAlpha()
-    .png()
-    .toBuffer()
-    .catch(() => alphaSafeProductBuffer); // Fallback if trim fails (e.g. no transparency to trim)
+  if (process.env.NODE_ENV !== "production") {
+    try {
+      const debugProductPath = join(process.cwd(), "debug-product-before-compose.png");
+      const debugBackgroundPath = join(process.cwd(), "debug-background-before-compose.png");
 
-  const fgMeta = await sharp(trimmedFgBuffer).metadata();
-  const productWidth = fgMeta.width || 1024;
-  const productHeight = fgMeta.height || 1024;
-
-  console.log("[Compose] product original hasAlpha:", fgMeta.hasAlpha, "format:", fgMeta.format);
-
-  const targetProductHeight = Math.floor(bgHeight * 0.65);
-  const targetProductWidthLimit = Math.floor(bgWidth * 0.80);
-
-  let resizedFgBuffer = await sharp(trimmedFgBuffer)
-    .ensureAlpha()
-    .resize({
-      height: targetProductHeight,
-      width: targetProductWidthLimit,
-      fit: "inside",
-      withoutEnlargement: false,
-      background: { r: 0, g: 0, b: 0, alpha: 0 }
-    })
-    .png()
-    .toBuffer();
-
-  let resizedMeta = await sharp(resizedFgBuffer).metadata();
-  let resizedWidth = resizedMeta.width || 0;
-  let resizedHeight = resizedMeta.height || 0;
-
-  if (resizedWidth > bgWidth || resizedHeight > bgHeight) {
-    resizedFgBuffer = await sharp(resizedFgBuffer)
-      .ensureAlpha()
-      .resize({
-        width: Math.floor(bgWidth * 0.75),
-        height: Math.floor(bgHeight * 0.65),
-        fit: "inside",
-        background: { r: 0, g: 0, b: 0, alpha: 0 }
-      })
-      .png()
-      .toBuffer();
-    resizedMeta = await sharp(resizedFgBuffer).metadata();
-    resizedWidth = resizedMeta.width || 0;
-    resizedHeight = resizedMeta.height || 0;
+      await writeFile(debugProductPath, productPng);
+      await writeFile(debugBackgroundPath, backgroundBuffer);
+      console.log("[Compose] debug image written:", debugProductPath);
+      console.log("[Compose] debug image written:", debugBackgroundPath);
+    } catch (error: any) {
+      console.warn("[Compose] debug save failed:", error.message || String(error));
+    }
   }
 
-  const left = Math.max(0, Math.floor((bgWidth - resizedWidth) / 2));
-  const top = Math.max(0, Math.floor((bgHeight - resizedHeight) / 2));
+  const left = Math.max(0, Math.floor((bgWidth - productWidth) / 2));
+  const top = Math.max(0, Math.floor((bgHeight - productHeight) / 2));
 
   console.log("[Compose] background dimensions:", bgWidth, bgHeight);
-  console.log("[Compose] product original dimensions:", productWidth, productHeight);
-  console.log("[Compose] product resized dimensions:", resizedWidth, resizedHeight);
+  console.log("[Compose] product resized dimensions:", productWidth, productHeight);
   console.log("[Compose] composite position:", left, top);
-  console.log("[Compose] product resized channels:", resizedMeta.channels);
-  console.log("[Compose] flatten used: false");
 
-  const result = await bg
+  const output = await sharp(backgroundBuffer)
+    .png()
     .composite([
       {
-        input: resizedFgBuffer,
+        input: productPng,
         left: left,
-        top: top
+        top: top,
+        blend: "over",
       }
     ])
     .png()
     .toBuffer();
 
+  if (process.env.NODE_ENV !== "production") {
+    try {
+      const debugFinalPath = join(process.cwd(), "debug-final-compose.png");
+
+      await writeFile(debugFinalPath, output);
+      console.log("[Compose] debug image written:", debugFinalPath);
+    } catch (error: any) {
+      console.warn("[Compose] debug save failed:", error.message || String(error));
+    }
+  }
+
   console.log("[Pipeline] 4/4: Composition complete.");
   console.log("[Compose] final composite completed");
-  return result;
+  return output;
 }
