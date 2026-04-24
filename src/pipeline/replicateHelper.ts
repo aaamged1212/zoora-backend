@@ -1,4 +1,5 @@
 import axios from "axios";
+import { ENV } from "../config/env.js";
 
 async function requestWithRetry(requestFn: () => Promise<any>, attempt = 0): Promise<any> {
   try {
@@ -18,18 +19,45 @@ async function requestWithRetry(requestFn: () => Promise<any>, attempt = 0): Pro
   }
 }
 
-export async function runReplicate(version: string, input: any): Promise<any> {
+function getPredictionRequest(identifier: string, input: any) {
+  const modelVersion = identifier.match(/^([^/]+)\/([^:]+):(.+)$/);
+
+  if (modelVersion) {
+    return {
+      url: "https://api.replicate.com/v1/predictions",
+      body: { version: modelVersion[3], input },
+    };
+  }
+
+  const model = identifier.match(/^([^/]+)\/([^:]+)$/);
+
+  if (model) {
+    return {
+      url: `https://api.replicate.com/v1/models/${model[1]}/${model[2]}/predictions`,
+      body: { input },
+    };
+  }
+
+  return {
+    url: "https://api.replicate.com/v1/predictions",
+    body: { version: identifier, input },
+  };
+}
+
+export async function runReplicate(identifier: string, input: any): Promise<any> {
   console.log("[Replicate] start...");
 
   const headers = {
-    Authorization: `Token ${process.env.REPLICATE_API_TOKEN}`,
+    Authorization: `Token ${ENV.REPLICATE_API_TOKEN}`,
     "Content-Type": "application/json",
   };
 
+  const request = getPredictionRequest(identifier, input);
+
   let { data: prediction } = await requestWithRetry(() =>
     axios.post(
-      "https://api.replicate.com/v1/predictions",
-      { version, input },
+      request.url,
+      request.body,
       { headers }
     )
   );

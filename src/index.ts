@@ -1,31 +1,25 @@
-import "dotenv/config";
 import express from "express";
-import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
+import { ENV } from "./config/env.js";
 import { processJob } from "./pipeline/processJob.js";
 
-dotenv.config();
-
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = ENV.PORT;
 
 app.use(express.json({ limit: "25mb" }));
 
-const supabaseUrl = process.env.SUPABASE_URL || "https://placeholder.supabase.co";
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "placeholder_key";
-const replicateApiToken = process.env.REPLICATE_API_TOKEN;
-const openaiApiKey = process.env.OPENAI_API_KEY;
+console.log("[ENV] Checking environment variables...");
+void ENV.REPLICATE_API_TOKEN;
+void ENV.REPLICATE_FAST_ENHANCE_VERSION;
+void ENV.REPLICATE_SUPIR_VERSION;
+void ENV.SUPABASE_URL;
+void ENV.SUPABASE_SERVICE_ROLE_KEY;
+void ENV.PORT;
+console.log("[ENV] Loaded Replicate token OK");
+console.log("[ENV] Environment variables ready");
 
-if (!supabaseUrl || !serviceRoleKey) {
-  console.warn("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env");
-}
-
-if (!replicateApiToken) {
-  console.warn("Missing REPLICATE_API_TOKEN");
-}
-
-const supabase = createClient(supabaseUrl, serviceRoleKey, {
+const supabase = createClient(ENV.SUPABASE_URL, ENV.SUPABASE_SERVICE_ROLE_KEY, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
@@ -39,14 +33,14 @@ app.get("/health", (req, res) => {
 app.post("/process-job", async (req, res) => {
   console.log("[Zoora Backend] process-job called");
   try {
-    const { image, prompt } = req.body;
+    const { image, prompt, enhanceMode } = req.body;
 
     if (!image || !prompt) {
       return res.status(400).json({ error: "Missing image or prompt" });
     }
 
     // Call existing processJob logic
-    const result = await processJob({ image, prompt });
+    const result = await processJob({ image, prompt, enhanceMode });
     
     // Expected handling based on result type:
     if (Buffer.isBuffer(result)) {
