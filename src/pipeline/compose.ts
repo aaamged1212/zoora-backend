@@ -26,17 +26,30 @@ export async function composeImages(bgUrl: string, fgUrl: string): Promise<Buffe
   const bgBuffer = await downloadImageWithRetry(bgUrl);
   const fgBuffer = await downloadImageWithRetry(fgUrl);
 
-  const bg = sharp(bgBuffer);
+  const bgPngBuffer = await sharp(bgBuffer).autoOrient().png().toBuffer();
+  const bg = sharp(bgPngBuffer);
   const bgMeta = await bg.metadata();
   const bgWidth = bgMeta.width || 1024;
   const bgHeight = bgMeta.height || 1024;
 
-  // Auto-orient and trim transparent space to ensure perfect scaling and centering
-  const orientedFgBuffer = await sharp(fgBuffer).autoOrient().toBuffer();
-  const trimmedFgBuffer = await sharp(orientedFgBuffer)
+  const alphaSafeProductBuffer = await sharp(fgBuffer)
+    .autoOrient()
+    .ensureAlpha()
+    .png()
+    .toBuffer();
+  const productMeta = await sharp(alphaSafeProductBuffer).metadata();
+
+  console.log("[Compose] product channels:", productMeta.channels);
+  console.log("[Compose] product has alpha:", productMeta.hasAlpha === true || (productMeta.channels || 0) >= 4);
+  console.log("[Compose] black background check:", productMeta.hasAlpha === true ? "alpha present" : "missing alpha");
+  console.log("[Compose] using alpha-safe product:", true);
+
+  const trimmedFgBuffer = await sharp(alphaSafeProductBuffer)
     .trim()
+    .ensureAlpha()
+    .png()
     .toBuffer()
-    .catch(() => orientedFgBuffer); // Fallback if trim fails (e.g. no transparency to trim)
+    .catch(() => alphaSafeProductBuffer); // Fallback if trim fails (e.g. no transparency to trim)
 
   const fgMeta = await sharp(trimmedFgBuffer).metadata();
   const productWidth = fgMeta.width || 1024;
@@ -89,56 +102,8 @@ export async function composeImages(bgUrl: string, fgUrl: string): Promise<Buffe
   console.log("[Compose] product resized channels:", resizedMeta.channels);
   console.log("[Compose] flatten used: false");
 
-  console.log("[Compose] generating realistic shadows...");
-  
-  const shadowPadding = 100;
-
-  // Extract alpha channel from the resized foreground, with padding to prevent clipping
-  const paddedAlphaBuffer = await sharp(resizedFgBuffer)
-    .extend({
-      top: shadowPadding,
-      bottom: shadowPadding,
-      left: shadowPadding,
-      right: shadowPadding,
-      background: { r: 0, g: 0, b: 0, alpha: 0 }
-    })
-    .extractChannel("alpha")
-    .toBuffer();
-
-  // 1. Soft shadow (wide blur, low opacity, dropped vertically)
-  const softShadowAlpha = await sharp(paddedAlphaBuffer).linear(0.3).toBuffer();
-  const softShadowBuffer = await sharp({
-    create: {
-      width: resizedWidth + shadowPadding * 2,
-      height: resizedHeight + shadowPadding * 2,
-      channels: 3,
-      background: { r: 0, g: 0, b: 0 }
-    }
-  })
-    .joinChannel(softShadowAlpha)
-    .blur(25)
-    .png()
-    .toBuffer();
-
-  // 2. Contact shadow (tight blur, high opacity, right beneath the object)
-  const contactShadowAlpha = await sharp(paddedAlphaBuffer).linear(0.8).toBuffer();
-  const contactShadowBuffer = await sharp({
-    create: {
-      width: resizedWidth + shadowPadding * 2,
-      height: resizedHeight + shadowPadding * 2,
-      channels: 3,
-      background: { r: 0, g: 0, b: 0 }
-    }
-  })
-    .joinChannel(contactShadowAlpha)
-    .blur(4)
-    .png()
-    .toBuffer();
-
   const result = await bg
     .composite([
-      { input: softShadowBuffer, left: left - shadowPadding, top: top - shadowPadding + 20 },
-      { input: contactShadowBuffer, left: left - shadowPadding, top: top - shadowPadding + 4 },
       {
         input: resizedFgBuffer,
         left: left,
@@ -149,5 +114,6 @@ export async function composeImages(bgUrl: string, fgUrl: string): Promise<Buffe
     .toBuffer();
 
   console.log("[Pipeline] 4/4: Composition complete.");
+  console.log("[Compose] final composite completed");
   return result;
 }

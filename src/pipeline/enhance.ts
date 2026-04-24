@@ -44,7 +44,7 @@ async function restoreAlpha(enhancedBuffer: Buffer, alphaSourceBuffer: Buffer): 
   return sharp(enhancedBuffer).removeAlpha().joinChannel(alpha).png().toBuffer();
 }
 
-async function outputToPngBuffer(output: unknown, alphaSourceBuffer: Buffer): Promise<Buffer> {
+async function replicateOutputToBuffer(output: unknown): Promise<Buffer> {
   const resultUrl = Array.isArray(output) ? output[0] : output;
 
   if (!resultUrl || typeof resultUrl !== "string") {
@@ -59,6 +59,21 @@ async function outputToPngBuffer(output: unknown, alphaSourceBuffer: Buffer): Pr
     outputBuffer = Buffer.from(res.data);
   } else {
     throw new Error("Invalid enhancement output URL");
+  }
+
+  return outputBuffer;
+}
+
+async function outputToCutoutPngBuffer(output: unknown, alphaSourceBuffer: Buffer): Promise<Buffer> {
+  const outputBuffer = await replicateOutputToBuffer(output);
+  const rawMeta = await sharp(outputBuffer).metadata();
+  const rawChannels = rawMeta.channels || 0;
+  const rawHasAlpha = rawMeta.hasAlpha === true || rawChannels >= 4;
+
+  console.log("[Enhance] AI cutout alpha valid:", rawHasAlpha);
+
+  if (rawChannels < 4 || !rawHasAlpha) {
+    throw new Error("AI enhanced cutout lost alpha");
   }
 
   return restoreAlpha(outputBuffer, alphaSourceBuffer);
@@ -87,11 +102,11 @@ async function resizeForAi(inputBuffer: Buffer): Promise<Buffer> {
 }
 
 async function localSharpFallback(inputBuffer: Buffer): Promise<Buffer> {
-  console.log("[Enhance] using local sharp fallback");
+  console.log("[Enhance] fallback to alpha-safe local enhancement");
   return sharp(inputBuffer)
     .ensureAlpha()
-    .sharpen({ sigma: 1.2 })
-    .modulate({ brightness: 1.05, saturation: 1.08 })
+    .sharpen({ sigma: 1.1 })
+    .modulate({ brightness: 1.04, saturation: 1.05 })
     .png()
     .toBuffer();
 }
@@ -102,40 +117,31 @@ async function runFastEnhance(resizedBuffer: Buffer): Promise<Buffer> {
 
   console.log("[Enhance] sending to Replicate: fast");
   const output = await runReplicate(model, { image });
-  const enhancedBuffer = await outputToPngBuffer(output, resizedBuffer);
+  const enhancedBuffer = await outputToCutoutPngBuffer(output, resizedBuffer);
   console.log("[Enhance] success: fast");
   return enhancedBuffer;
 }
 
-async function runProEnhance(resizedBuffer: Buffer): Promise<Buffer> {
+async function runProFinalPolish(resizedBuffer: Buffer): Promise<Buffer> {
   const model = `cjwbw/supir-v0q:${ENV.REPLICATE_SUPIR_VERSION}`;
   const image = `data:image/png;base64,${resizedBuffer.toString("base64")}`;
 
   console.log("[Enhance] sending to Replicate: pro");
   const output = await runReplicate(model, { image });
-  const enhancedBuffer = await outputToPngBuffer(output, resizedBuffer);
+  const outputBuffer = await replicateOutputToBuffer(output);
   console.log("[Enhance] success: pro");
-  return enhancedBuffer;
+  return sharp(outputBuffer).png().toBuffer();
 }
 
 export async function enhanceProduct(
   imageInput: string | Buffer,
   options: EnhanceOptions = {}
 ): Promise<Buffer> {
-  const mode = normalizeMode(options.mode);
-  console.log(`[Enhance] mode: ${mode}`);
+  normalizeMode(options.mode);
+  console.log("[Enhance] cutout enhancement mode: fast only");
 
   const inputBuffer = await inputToBuffer(imageInput);
   const resizedBuffer = await resizeForAi(inputBuffer);
-
-  if (mode === "pro") {
-    try {
-      return await runProEnhance(resizedBuffer);
-    } catch (error: any) {
-      console.warn("[Enhance] failed: pro:", error.message || String(error));
-      console.warn("[Enhance] falling back to fast");
-    }
-  }
 
   try {
     return await runFastEnhance(resizedBuffer);
@@ -148,4 +154,32 @@ export async function enhanceProduct(
 export async function enhanceImage(imageUrl: string): Promise<string> {
   const enhancedBuffer = await enhanceProduct(imageUrl, { mode: "fast" });
   return `data:image/png;base64,${enhancedBuffer.toString("base64")}`;
+}
+
+async function localFinalPolish(composedImage: Buffer): Promise<Buffer> {
+  return sharp(composedImage)
+    .sharpen({ sigma: 0.7 })
+    .modulate({ brightness: 1.03, saturation: 1.04 })
+    .png()
+    .toBuffer();
+}
+
+export async function finalPolish(composedImage: Buffer, mode: EnhanceMode): Promise<Buffer> {
+  if (mode !== "pro") {
+    return composedImage;
+  }
+
+  console.log("[Enhance] final pro polish started");
+
+  try {
+    const resizedBuffer = await resizeForAi(composedImage);
+    const polishedBuffer = await runProFinalPolish(resizedBuffer);
+    console.log("[Enhance] final pro polish completed");
+    return polishedBuffer;
+  } catch (error: any) {
+    console.warn("[Enhance] failed: final pro polish:", error.message || String(error));
+    const fallbackBuffer = await localFinalPolish(composedImage);
+    console.log("[Enhance] final pro polish completed");
+    return fallbackBuffer;
+  }
 }

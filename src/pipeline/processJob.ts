@@ -2,7 +2,7 @@ import sharp from "sharp";
 import axios from "axios";
 import { removeBackground } from "./rembg.js";
 import { generateBackground } from "./generateBackground.js";
-import { enhanceProduct, type EnhanceMode } from "./enhance.js";
+import { enhanceProduct, finalPolish, type EnhanceMode } from "./enhance.js";
 import { composeImages } from "./compose.js";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -65,22 +65,7 @@ export async function processJob(input: {
   }
 
   console.log("[Pipeline] 2/4: Enhancing resized product...");
-  let finalEnhancedBuffer = await enhanceProduct(cutoutBuffer, { mode: enhanceMode });
-
-  try {
-    finalEnhancedBuffer = await sharp(finalEnhancedBuffer)
-      .ensureAlpha()
-      .sharpen({ sigma: 1.5 })
-      .modulate({ brightness: 1.08, saturation: 1.1 })
-      .linear(1.05, -5)
-      .png()
-      .toBuffer();
-
-    console.log("[Enhance] Final image ready");
-  } catch (criticalError: any) {
-    console.error("[Enhance] CRITICAL ERROR:", criticalError.message);
-    throw new Error("Enhancement pipeline failed");
-  }
+  const finalEnhancedBuffer = await enhanceProduct(cutoutBuffer, { mode: enhanceMode });
 
   const finalEnhancedCutoutUrl = `data:image/png;base64,${finalEnhancedBuffer.toString("base64")}`;
 
@@ -92,7 +77,8 @@ export async function processJob(input: {
 
   // 4. Composite
   console.log("[Pipeline] 4/4: Compositing final image...");
-  const finalImage = await composeImages(bg, finalEnhancedCutoutUrl);
+  const composedImage = await composeImages(bg, finalEnhancedCutoutUrl);
+  const finalImage = await finalPolish(composedImage, enhanceMode);
 
   console.log("[worker] Final image ready.");
   return finalImage;
