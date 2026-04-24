@@ -3,7 +3,7 @@ import { runReplicate } from "./replicateHelper.js";
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function generateBackground(prompt: string): Promise<string> {
-  console.log(`[Pipeline] 3/4: Generating background for prompt: "${prompt}"...`);
+  console.log(`[BG] generating background for prompt: "${prompt}"...`);
   
   let cleanPrompt = prompt.replace(/black background/gi, "").replace(/dark background/gi, "").trim();
   

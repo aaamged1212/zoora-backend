@@ -8,7 +8,11 @@ import { composeImages } from "./compose.js";
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function normalizeEnhanceMode(mode?: string): EnhanceMode {
-  return mode === "pro" ? "pro" : "fast";
+  if (mode === "pro" || mode === "ultra") {
+    return mode;
+  }
+
+  return "fast";
 }
 
 export async function processJob(input: {
@@ -25,8 +29,7 @@ export async function processJob(input: {
     throw new Error("Input must contain an 'image' URL.");
   }
 
-  // 0. Resize initial input image to avoid Replicate GPU memory limits
-  console.log("[worker] Fetching and resizing original input image...");
+  console.log("[Pipeline] 1/6 Load product image");
   let initialBuffer: Buffer;
   if (image.startsWith("data:")) {
     initialBuffer = Buffer.from(image.split(",")[1], "base64");
@@ -48,14 +51,12 @@ export async function processJob(input: {
 
   image = `data:image/png;base64,${initialResizedBuffer.toString("base64")}`;
 
-  // 1. Remove background
-  console.log("[Pipeline] 1/4: Removing background...");
+  console.log("[Pipeline] 2/6 Remove background");
   const cutout = await removeBackground(image);
   
   await delay(1500);
 
-  // 1.5. Prepare cutout for enhancement. enhanceProduct performs the AI-safe resize.
-  console.log("[worker] Preparing cutout image for enhancement...");
+  console.log("[Pipeline] 3/6 Local cutout polish");
   let cutoutBuffer: Buffer;
   if (cutout.startsWith("data:")) {
     cutoutBuffer = Buffer.from(cutout.split(",")[1], "base64");
@@ -64,20 +65,18 @@ export async function processJob(input: {
     cutoutBuffer = Buffer.from(res.data);
   }
 
-  console.log("[Pipeline] 2/4: Enhancing resized product...");
   const finalEnhancedBuffer = await enhanceProduct(cutoutBuffer, { mode: enhanceMode });
 
   const finalEnhancedCutoutUrl = `data:image/png;base64,${finalEnhancedBuffer.toString("base64")}`;
 
   await delay(1500);
 
-  // 3. Generate background
-  console.log("[Pipeline] 3/4: Generating background...");
+  console.log("[Pipeline] 4/6 Generate background");
   const bg = await generateBackground(prompt || "studio lighting background");
 
-  // 4. Composite
-  console.log("[Pipeline] 4/4: Compositing final image...");
+  console.log("[Pipeline] 5/6 Compose product with background");
   const composedImage = await composeImages(bg, finalEnhancedCutoutUrl);
+  console.log(`[Pipeline] 6/6 Final polish: ${enhanceMode}`);
   const finalImage = await finalPolish(composedImage, enhanceMode);
 
   console.log("[worker] Final image ready.");

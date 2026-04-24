@@ -14,7 +14,7 @@ async function downloadImageWithRetry(url: string, attempt = 0): Promise<Buffer>
   } catch (error: any) {
     if (error.response && error.response.status === 429 && attempt < 5) {
       const waitTime = Math.pow(2, attempt) * 1000;
-      console.log(`[Pipeline] Retrying download after 429... (Wait: ${waitTime}ms, Attempt: ${attempt + 1}/5)`);
+      console.log(`[Compose] retrying download after 429... (Wait: ${waitTime}ms, Attempt: ${attempt + 1}/5)`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
       return downloadImageWithRetry(url, attempt + 1);
     }
@@ -23,7 +23,7 @@ async function downloadImageWithRetry(url: string, attempt = 0): Promise<Buffer>
 }
 
 export async function composeImages(bgUrl: string, fgUrl: string): Promise<Buffer> {
-  console.log("[Pipeline] 4/4: Compositing images...");
+  console.log("[Compose] compositing images...");
   console.log("[Compose] simplified alpha-safe compose enabled");
   console.log("[Compose] trim disabled");
   console.log("[Compose] shadow disabled");
@@ -109,7 +109,6 @@ export async function composeImages(bgUrl: string, fgUrl: string): Promise<Buffe
     }
   }
 
-  console.log("[Pipeline] 4/4: Composition complete.");
   console.log("[Compose] final composite completed");
   return output;
 }
