@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import axios from "axios";
+import { ENV } from "../config/env.js";
 import { removeBackground } from "./rembg.js";
 import { generateBackground, generateSafeFallbackBackground, type ProductMetrics } from "./generateBackground.js";
 import { enhanceProduct, finalPolish, type EnhanceMode } from "./enhance.js";
@@ -109,47 +110,7 @@ export async function processJob(input: {
   });
   console.log("[Execution] background generated:", true);
 
-  try {
-    console.log("[Pipeline] 6/11 Analyze background");
-    const bgBuffer = await imageInputToBuffer(bg);
-    const backgroundQuality = await analyzeGeneratedBackground(bgBuffer);
-    const contrastGap = Math.abs((productAnalysis.productBrightness || 0) - backgroundQuality.centerBrightness);
-    let backgroundRegenerated = false;
-    if (backgroundQuality.accepted) {
-      console.log("[Quality Guard] background accepted:", backgroundQuality.reason);
-    } else {
-      console.warn("[Quality Guard] background rejected:", backgroundQuality.reason);
-      bg = await generateBackground(
-        `${creativePlan.scene.backgroundPrompt}, empty placement surface, no product, no objects, clear product area`,
-        {
-          enhanceMode,
-          negativePrompt: `${creativePlan.scene.negativePrompt}, central object, foreground object, cluttered center`,
-          productCategory: creativePlan.product.category,
-          creativePlan,
-          productMetrics,
-        }
-      );
-      console.log("[Execution] background generated:", true);
-      backgroundRegenerated = true;
-    }
-
-    if (!backgroundRegenerated && contrastGap < 32) {
-      console.warn("[Quality Guard] background rejected: product contrast too low");
-      bg = await generateBackground(
-        `${creativePlan.scene.backgroundPrompt}. ${buildContrastRegenerationInstruction(productAnalysis)}`,
-        {
-          enhanceMode,
-          negativePrompt: `${creativePlan.scene.negativePrompt}, low contrast, matching product color, washed out product, product blending into background`,
-          productCategory: creativePlan.product.category,
-          creativePlan,
-          productMetrics,
-        }
-      );
-      console.log("[Execution] background generated:", true);
-    }
-  } catch (error: any) {
-    console.warn("[Quality Guard] background check skipped:", error.message || String(error));
-  }
+  console.log("[Pipeline] 6/11 Analyze background geometry & apply heuristic fallback");
 
   bg = await ensureBackgroundGeometry({
     backgroundUrl: bg,
@@ -168,12 +129,19 @@ export async function processJob(input: {
   const finalQuality = await validateFinalImage(finalImage, { productHadAlpha: true });
 
   if (!finalQuality.accepted) {
-    console.warn("[Quality Guard] final rejected:", finalQuality.reason);
+    console.warn("[Guardian] mode:", enhanceMode);
+    console.warn("[Guardian] strictness:", ENV.GUARDIAN_STRICTNESS);
+    console.warn("[Guardian] decision: reject");
+    console.warn("[Guardian] reason:", finalQuality.reason);
+    console.warn("[Guardian] retry allowed: false");
     console.warn("[Quality Guard] returning pre-polish safe composite");
     return composedImage;
   }
 
-  console.log("[Quality Guard] final accepted:", finalQuality.reason);
+  console.log("[Guardian] mode:", enhanceMode);
+  console.log("[Guardian] strictness:", ENV.GUARDIAN_STRICTNESS);
+  console.log("[Guardian] decision: accept");
+  console.log("[Guardian] reason:", finalQuality.reason);
 
   console.log("[worker] Final image ready.");
   return finalImage;
@@ -282,27 +250,13 @@ async function ensureBackgroundGeometry(input: {
     return input.backgroundUrl;
   }
 
-  console.warn("[BG Geometry] rejected:", firstPass.reason);
-  console.log("[BG] regenerating with geometry-aligned surface prompt");
+  console.warn("[Guardian] mode:", input.enhanceMode);
+  console.warn("[Guardian] strictness:", ENV.GUARDIAN_STRICTNESS);
+  console.warn("[Guardian] decision: reject");
+  console.warn("[Guardian] reason:", firstPass.reason);
+  console.warn("[Guardian] retry allowed: false");
+  console.log("[Guardian] using safe fallback immediately");
 
-  const retryBackground = await generateBackground(
-    `${input.creativePlan.scene.backgroundPrompt}, clear horizontal surface aligned for product base placement, correct vertical alignment, no floating, no gap`,
-    {
-      enhanceMode: input.enhanceMode,
-      negativePrompt: `${input.negativePrompt}, floating product, misaligned surface, surface too high, surface too low, gap under product`,
-      productCategory: input.productCategory,
-      creativePlan: input.creativePlan,
-      productMetrics: input.productMetrics,
-    }
-  );
-  const retryPass = await validateBackgroundGeometry(retryBackground, input.productMetrics, input.creativePlan);
-
-  if (retryPass.accepted) {
-    return retryBackground;
-  }
-
-  console.warn("[BG Geometry] rejected:", retryPass.reason);
-  console.log("[BG] using safe flat surface fallback");
   return generateSafeFallbackBackground(input.productCategory, 1024, 1024);
 }
 

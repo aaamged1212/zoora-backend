@@ -54,11 +54,11 @@ export async function generateBackground(prompt: string, options: GenerateBackgr
     ? `${options.negativePrompt}, ${REQUIRED_NEGATIVE_TERMS}, no product, no bottle, no container, no duplicate object, no central object, pure black background, empty black screen, flat color, underexposed, no details`
     : `${REQUIRED_NEGATIVE_TERMS}, no product, no bottle, no container, no duplicate object, no central object, pure black background, empty black screen, flat color, underexposed, no details`;
   const model = enhanceMode === "pro" ? ENV.BG_MODEL_PRO : ENV.BG_MODEL_FAST;
-  const maxBgRetries = parseMaxRetries(ENV.MAX_BG_RETRIES);
+  const maxBgRetries = enhanceMode === "pro" ? parseMaxRetries(ENV.MAX_BG_RETRIES_PRO) : parseMaxRetries(ENV.MAX_BG_RETRIES_FAST);
 
   try {
     const result = await runBackgroundModel(model, enhanceMode, finalPrompt, negativePrompt);
-    const quality = await validateBackgroundResult(result, options);
+    const quality = await validateBackgroundResult(result, options, maxBgRetries);
 
     if (quality.accepted) {
       return result;
@@ -76,7 +76,7 @@ export async function generateBackground(prompt: string, options: GenerateBackgr
       );
       try {
         const strictResult = await runBackgroundModel(model, enhanceMode, strictPrompt, negativePrompt);
-        const strictQuality = await validateBackgroundResult(strictResult, options);
+        const strictQuality = await validateBackgroundResult(strictResult, options, 0);
 
         if (strictQuality.accepted) {
           return strictResult;
@@ -101,7 +101,7 @@ export async function generateBackground(prompt: string, options: GenerateBackgr
           buildBackgroundPrompt(cleanPrompt, "fast", safetyTerms, geometryTerms),
           negativePrompt
         );
-        const fastFallbackQuality = await validateBackgroundResult(fastFallbackResult, options);
+        const fastFallbackQuality = await validateBackgroundResult(fastFallbackResult, options, 0);
         if (fastFallbackQuality.accepted) {
           return fastFallbackResult;
         }
@@ -148,16 +148,27 @@ function logProductGeometry(productMetrics?: ProductMetrics): void {
   console.log("[BG Geometry] expected surface alignment:", "product_bottom_Y = surface_Y");
 }
 
-async function validateBackgroundResult(resultUrl: string, options: GenerateBackgroundOptions) {
+async function validateBackgroundResult(resultUrl: string, options: GenerateBackgroundOptions, maxRetries: number) {
+  console.log(`[Guardian] mode: ${options.enhanceMode || "fast"}`);
+  console.log(`[Guardian] strictness: ${ENV.GUARDIAN_STRICTNESS}`);
+
+  if (options.enhanceMode !== "pro") {
+    console.log("[Guardian] decision: accept");
+    console.log("[Guardian] reason: heuristic validation only in fast mode");
+    console.log(`[Guardian] retry allowed: ${maxRetries > 0}`);
+    return { accepted: true, reason: "fast mode heuristics", centerZoneEmpty: true, hasProductLikeObject: false, hasCentralObject: false, recommendedAction: "none" };
+  }
+
   try {
     const result = await validateGeneratedBackground(resultUrl, options.productCategory, options.creativePlan);
-    console.log("[BG Vision] accepted:", result.accepted);
-    if (!result.accepted) {
-      console.warn("[BG Vision] rejected:", result.reason);
-    }
+    console.log(`[Guardian] decision: ${result.accepted ? "accept" : "reject"}`);
+    console.log(`[Guardian] reason: ${result.reason}`);
+    console.log(`[Guardian] retry allowed: ${!result.accepted && maxRetries > 0}`);
     return result;
   } catch (error: any) {
-    console.warn("[BG Vision] validation failed:", error.message || String(error));
+    console.warn("[Guardian] decision: reject");
+    console.warn(`[Guardian] reason: validation failed - ${error.message || String(error)}`);
+    console.warn(`[Guardian] retry allowed: ${maxRetries > 0}`);
     return {
       accepted: false,
       reason: "background validation failed",
