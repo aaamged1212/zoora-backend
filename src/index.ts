@@ -11,8 +11,9 @@ app.use(express.json({ limit: "25mb" }));
 
 console.log("[ENV] Checking environment variables...");
 void ENV.REPLICATE_API_TOKEN;
-void ENV.REPLICATE_FAST_ENHANCE_VERSION;
-void ENV.REPLICATE_SUPIR_VERSION;
+void ENV.BG_MODEL_FAST;
+void ENV.BG_MODEL_PRO;
+void ENV.MAX_BG_RETRIES;
 void ENV.SUPABASE_URL;
 void ENV.SUPABASE_SERVICE_ROLE_KEY;
 void ENV.PORT;
@@ -30,17 +31,34 @@ app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/analyze-product", async (req, res) => {
+  console.log("[Zoora Backend] POST /analyze-product called");
+  try {
+    const { image } = req.body;
+    if (!image) {
+      return res.status(400).json({ error: "Missing image" });
+    }
+    const { analyzeProductWithAI } = await import("./pipeline/aiAnalyzer.js");
+    const result = await analyzeProductWithAI(image);
+    return res.status(200).json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[api] /analyze-product ERROR:", message);
+    return res.status(500).json({ error: message });
+  }
+});
+
 app.post("/process-job", async (req, res) => {
   console.log("[Zoora Backend] process-job called");
   try {
-    const { image, prompt, enhanceMode } = req.body;
+    const { image, prompt, enhanceMode, productCategory, productType, subcategory } = req.body;
 
-    if (!image || !prompt) {
-      return res.status(400).json({ error: "Missing image or prompt" });
+    if (!image) {
+      return res.status(400).json({ error: "Missing image" });
     }
 
     // Call existing processJob logic
-    const result = await processJob({ image, prompt, enhanceMode });
+    const result = await processJob({ image, prompt, enhanceMode, productCategory, productType, subcategory });
     
     // Expected handling based on result type:
     if (Buffer.isBuffer(result)) {

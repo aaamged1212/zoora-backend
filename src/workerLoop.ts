@@ -4,8 +4,9 @@ import { processJob } from "./pipeline/processJob.js";
 
 console.log("[ENV] Checking environment variables...");
 void ENV.REPLICATE_API_TOKEN;
-void ENV.REPLICATE_FAST_ENHANCE_VERSION;
-void ENV.REPLICATE_SUPIR_VERSION;
+void ENV.BG_MODEL_FAST;
+void ENV.BG_MODEL_PRO;
+void ENV.MAX_BG_RETRIES;
 void ENV.SUPABASE_URL;
 void ENV.SUPABASE_SERVICE_ROLE_KEY;
 void ENV.PORT;
